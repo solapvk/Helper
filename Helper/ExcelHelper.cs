@@ -76,9 +76,10 @@ namespace Helper
             using (var fstream = System.IO.File.OpenRead(path))
             {
 
-                IWorkbook workbook = new HSSFWorkbook(fstream);
-
+                IWorkbook workbook = WorkbookFactory.Create(fstream);
+                var formulaEvaluator = new Lazy<IFormulaEvaluator>(() => WorkbookFactory.CreateFormulaEvaluator(workbook));
                 var sheet = workbook.GetSheetAt(sheetIndex);
+
                 var header = sheet.GetRow(0);
                 var hsells = header.GetEnumerator();
                 Dictionary<int, string> dic = new Dictionary<int, string>();
@@ -108,8 +109,9 @@ namespace Helper
                     while (rows.MoveNext())
                     {
                         var row = rows.Current as IRow;
-                        if (row == null) continue;
-                        yield return ReadRowAsDynamic(dic, row);
+                        if (row == null)
+                            continue;
+                        yield return ReadRowAsDynamic(dic, row, formulaEvaluator);
 
                     }
                 }
@@ -117,7 +119,47 @@ namespace Helper
 
         }
 
-        private static dynamic ReadRowAsDynamic(Dictionary<int, string> dic, IRow row)
+        private static object GetCellValue(ICell cell, Lazy<IFormulaEvaluator> formulaEvaluator)
+        {
+            switch (cell.CellType)
+            {
+                case CellType.Numeric:
+                    if (DateUtil.IsCellDateFormatted(cell))
+                    {
+                        return cell.DateCellValue;
+                    }
+                    return cell.NumericCellValue;
+                case CellType.String:
+                    return cell.StringCellValue;
+                case CellType.Formula:
+                    var cellValue = formulaEvaluator.Value.Evaluate(cell);
+                    if (cellValue.CellType == CellType.Numeric)
+                    {
+                        if (DateUtil.IsCellDateFormatted(cell))
+                        {
+                            return cell.DateCellValue;
+                        }
+                        return cellValue.NumberValue;
+                    }
+                    else if (cellValue.CellType == CellType.Boolean)
+                        return cellValue.BooleanValue;
+                    else if (cellValue.CellType == CellType.String)
+                        return cellValue.StringValue;
+                    else return null;
+                case CellType.Blank:
+                case CellType.Unknown:
+                    return null;
+                case CellType.Boolean:
+                    return cell.BooleanCellValue;
+                case CellType.Error:
+                    return cell.ErrorCellValue;
+                default:
+                    return null;
+            }
+
+        }
+
+        private static dynamic ReadRowAsDynamic(Dictionary<int, string> dic, IRow row, Lazy<IFormulaEvaluator> formulaEvaluator)
         {
             ICell cell;
             var dy = new System.Dynamic.ExpandoObject();
@@ -125,30 +167,8 @@ namespace Helper
             foreach (var item in dic)
             {
                 cell = row.GetCell(item.Key);
-                switch (cell.CellType)
-                {
-                    case CellType.Unknown:
-                        break;
-                    case CellType.Numeric:
-                        p.Add(item.Value, cell.NumericCellValue);
-                        break;
-                    case CellType.String:
-                        p.Add(item.Value, cell.StringCellValue);
-                        break;
-                    case CellType.Formula:
-                        p.Add(item.Value, cell.NumericCellValue);
-                        break;
-                    case CellType.Blank:
-                        p.Add(item.Value, null);
-                        break;
-                    case CellType.Boolean:
-                        p.Add(item.Value, cell.BooleanCellValue);
-                        break;
-                    case CellType.Error:
-                        p.Add(item.Value, cell.ErrorCellValue);
-
-                        break;
-                }
+                if (cell == null) continue;
+                p.Add(item.Value, GetCellValue(cell, formulaEvaluator));
 
             }
 
@@ -156,5 +176,5 @@ namespace Helper
         }
 
     }
-    
+
 }
